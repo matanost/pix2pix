@@ -7,6 +7,7 @@ from torchvision import transforms
 from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 
 
 # Define the INR MLP Model
@@ -57,7 +58,7 @@ class ImageDataset(Dataset):
         x = idx % self.w
         y = idx // self.w
         coords = torch.tensor([x / self.w, y / self.h], dtype=torch.float32)
-        color = self.image_tensor[:, x, y]
+        color = self.image_tensor[:, x, y]  # Corrected indexing
         return coords, color
 
 
@@ -68,6 +69,7 @@ class INRTrainer(pl.LightningModule):
         self.model = INRModel(layer_dims)
         self.criterion = nn.L1Loss()
         self.dataset = ImageDataset(image_path)
+        self.train_losses = []
 
     def forward(self, x):
         return self.model(x)
@@ -76,7 +78,8 @@ class INRTrainer(pl.LightningModule):
         coords, colors = batch
         preds = self(coords)
         loss = self.criterion(preds, colors)
-        self.log('train_loss', loss)
+        self.train_losses.append(loss.item())
+        self.log('train_loss', loss, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
     def configure_optimizers(self):
@@ -86,15 +89,38 @@ class INRTrainer(pl.LightningModule):
     def train_dataloader(self):
         return DataLoader(self.dataset, batch_size=32, shuffle=True)
 
-    def train_inr(self, max_epochs=100):
+    def train_inr(self, max_epochs):
         trainer = pl.Trainer(max_epochs=max_epochs)
         trainer.fit(self)
+        self.plot_loss()
         return self.model
+
+    def plot_loss(self):
+        plt.figure()
+        plt.plot(self.train_losses, label='L1 Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.title('Training Loss Over Epochs')
+        plt.legend()
+        plt.show()
+
+
+# Function to show the original image
+def my_imshow(image_path):
+    image = Image.open(image_path)
+    h, w = image.size
+    # Extract the part of the path starting from pix2pix
+    relative_path = os.path.join('pix2pix', os.path.relpath(image_path, start=image_path.split('pix2pix')[0]))
+    plt.imshow(image)
+    plt.title(f'{relative_path} - {w}x{h}')
+    plt.axis('off')
+    plt.show()
 
 
 # Example usage
 if __name__ == "__main__":
     image_path = '/home/matano/pix2pix/datasets/facades/train/1.jpg'
+    my_imshow(image_path)  # Show the original image with title
     layer_dims = [2, 128, 128, 128, 3]  # Example dimensions
     model = INRTrainer(layer_dims, image_path).train_inr(max_epochs=100)
 
