@@ -24,7 +24,7 @@ class INRModel(nn.Module):
     def forward(self, x):
         return self.mlp(x)
 
-    def generate_image(self, resolution):
+    def generate_image_tensor(self, resolution):
         h, w = resolution
         # Create a grid of coordinates
         coords = torch.stack(torch.meshgrid(torch.linspace(0, 1, w), torch.linspace(0, 1, h)), -1).reshape(-1, 2)
@@ -36,11 +36,7 @@ class INRModel(nn.Module):
         # Clip the colors to be in the valid range [0, 1]
         colors = np.clip(colors, 0, 1)
 
-        # Plot and save the image
-        plt.imshow(colors)
-        plt.axis('off')
-        plt.savefig('output_image.png', bbox_inches='tight', pad_inches=0)
-        plt.show()
+        return colors
 
 
 # Define the Image Dataset
@@ -90,16 +86,55 @@ class INRTrainer(pl.LightningModule):
     def train_inr(self, max_epochs=100):
         trainer = pl.Trainer(max_epochs=max_epochs)
         trainer.fit(self)
-        self.plot_loss()
+        self.plot_results()
         return self.model
 
-    def plot_loss(self):
+    def plot_results(self):
+        # Plot the training loss
         plt.figure()
         plt.plot(self.train_losses, label='L1 Loss')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
         plt.title('Training Loss Over Epochs')
         plt.legend()
+        plt.show()
+
+        # Show the original image
+        plt.figure()
+        plt.imshow(self.dataset.image_tensor.permute(1, 2, 0).cpu().numpy())
+        plt.title('Original Image')
+        plt.axis('off')
+        plt.show()
+
+        # Generate the INR image
+        resolution = (self.dataset.h, self.dataset.w)
+        inr_image = self.model.generate_image_tensor(resolution)
+
+        # Show the INR image
+        plt.figure()
+        plt.imshow(inr_image)
+        plt.title('INR Image')
+        plt.axis('off')
+        plt.show()
+
+        # Show the original and INR images side by side
+        fig, (ax1, ax2) = plt.subplots(1, 2)
+        ax1.imshow(self.dataset.image_tensor.permute(1, 2, 0).cpu().numpy())
+        ax1.set_title('Original Image')
+        ax1.axis('off')
+        ax2.imshow(inr_image)
+        ax2.set_title('INR Image')
+        ax2.axis('off')
+        plt.show()
+
+        # Compute and show the heatmap of L1 pixel distance
+        original_image = self.dataset.image_tensor.permute(1, 2, 0).cpu().numpy()
+        l1_distance = np.abs(original_image - inr_image).sum(axis=-1)
+        plt.figure()
+        plt.imshow(l1_distance, cmap='hot', interpolation='nearest')
+        plt.title('Heatmap of L1 Pixel Distance')
+        plt.colorbar()
+        plt.axis('off')
         plt.show()
 
 
@@ -136,7 +171,3 @@ if __name__ == "__main__":
 
     layer_dims = [2, 128, 128, 128, 3]  # Example dimensions
     model = INRTrainer(layer_dims, source_tensor).train_inr(max_epochs=100)
-
-    # Generate an image from the trained INR
-    resolution = (256, 256)  # Example resolution
-    model.generate_image(resolution)
