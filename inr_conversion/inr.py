@@ -45,11 +45,9 @@ class INRModel(nn.Module):
 
 # Define the Image Dataset
 class ImageDataset(Dataset):
-    def __init__(self, image_path):
-        self.image = Image.open(image_path).convert('RGB')
-        self.transform = transforms.ToTensor()
-        self.image_tensor = self.transform(self.image)
-        self.h, self.w = self.image.size
+    def __init__(self, image_tensor):
+        self.image_tensor = image_tensor
+        self.h, self.w = image_tensor.shape[1], image_tensor.shape[2]
 
     def __len__(self):
         return self.h * self.w
@@ -64,11 +62,11 @@ class ImageDataset(Dataset):
 
 # Define the PyTorch Lightning module
 class INRTrainer(pl.LightningModule):
-    def __init__(self, layer_dims, image_path):
+    def __init__(self, layer_dims, image_tensor):
         super(INRTrainer, self).__init__()
         self.model = INRModel(layer_dims)
         self.criterion = nn.L1Loss()
-        self.dataset = ImageDataset(image_path)
+        self.dataset = ImageDataset(image_tensor)
         self.train_losses = []
 
     def forward(self, x):
@@ -89,7 +87,7 @@ class INRTrainer(pl.LightningModule):
     def train_dataloader(self):
         return DataLoader(self.dataset, batch_size=32, shuffle=True)
 
-    def train_inr(self, max_epochs):
+    def train_inr(self, max_epochs=100):
         trainer = pl.Trainer(max_epochs=max_epochs)
         trainer.fit(self)
         self.plot_loss()
@@ -117,12 +115,27 @@ def my_imshow(image_path):
     plt.show()
 
 
+# Function to read the image, split into source and target, and return the source
+def read_and_split_image(image_path):
+    image = Image.open(image_path).convert('RGB')
+    w, h = image.size
+    source_image = image.crop((0, 0, w // 2, h))
+    target_image = image.crop((w // 2, 0, w, h))
+    source_tensor = transforms.ToTensor()(source_image)
+    target_tensor = transforms.ToTensor()(target_image)
+    return source_tensor, target_tensor
+
+
 # Example usage
 if __name__ == "__main__":
     image_path = '/home/matano/pix2pix/datasets/facades/train/1.jpg'
     my_imshow(image_path)  # Show the original image with title
+
+    # Read and split image into source and target
+    source_tensor, target_tensor = read_and_split_image(image_path)
+
     layer_dims = [2, 128, 128, 128, 3]  # Example dimensions
-    model = INRTrainer(layer_dims, image_path).train_inr(max_epochs=100)
+    model = INRTrainer(layer_dims, source_tensor).train_inr(max_epochs=100)
 
     # Generate an image from the trained INR
     resolution = (256, 256)  # Example resolution
