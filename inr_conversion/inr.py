@@ -52,7 +52,7 @@ class ImageDataset(Dataset):
         x = idx % self.w
         y = idx // self.w
         coords = torch.tensor([x / self.w, y / self.h], dtype=torch.float32)
-        color = self.image_tensor[:, x, y]  # Corrected indexing
+        color = self.image_tensor[:, x, y]
         return coords, color
 
 
@@ -86,56 +86,7 @@ class INRTrainer(pl.LightningModule):
     def train_inr(self, max_epochs=100):
         trainer = pl.Trainer(max_epochs=max_epochs)
         trainer.fit(self)
-        self.plot_results()
         return self.model
-
-    def plot_results(self):
-        # Plot the training loss
-        plt.figure()
-        plt.plot(self.train_losses, label='L1 Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title('Training Loss Over Epochs')
-        plt.legend()
-        plt.show()
-
-        # Show the original image
-        plt.figure()
-        plt.imshow(self.dataset.image_tensor.permute(1, 2, 0).cpu().numpy())
-        plt.title('Original Image')
-        plt.axis('off')
-        plt.show()
-
-        # Generate the INR image
-        resolution = (self.dataset.h, self.dataset.w)
-        inr_image = self.model.generate_image_tensor(resolution)
-
-        # Show the INR image
-        plt.figure()
-        plt.imshow(inr_image)
-        plt.title('INR Image')
-        plt.axis('off')
-        plt.show()
-
-        # Show the original and INR images side by side
-        fig, (ax1, ax2) = plt.subplots(1, 2)
-        ax1.imshow(self.dataset.image_tensor.permute(1, 2, 0).cpu().numpy())
-        ax1.set_title('Original Image')
-        ax1.axis('off')
-        ax2.imshow(inr_image)
-        ax2.set_title('INR Image')
-        ax2.axis('off')
-        plt.show()
-
-        # Compute and show the heatmap of L1 pixel distance
-        original_image = self.dataset.image_tensor.permute(1, 2, 0).cpu().numpy()
-        l1_distance = np.abs(original_image - inr_image).sum(axis=-1)
-        plt.figure()
-        plt.imshow(l1_distance, cmap='hot', interpolation='nearest')
-        plt.title('Heatmap of L1 Pixel Distance')
-        plt.colorbar()
-        plt.axis('off')
-        plt.show()
 
 
 # Function to show the original image
@@ -161,6 +112,45 @@ def read_and_split_image(image_path):
     return source_tensor, target_tensor
 
 
+# Function to plot results
+def plot_results(trainer, model, resolution):
+    # Plot the training loss
+    plt.figure(figsize=(12, 8))
+    plt.subplot(2, 2, 1)
+    plt.plot(trainer.train_losses, label='L1 Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training Loss Over Epochs')
+    plt.legend()
+
+    # Show the original image
+    plt.subplot(2, 2, 2)
+    plt.imshow(trainer.dataset.image_tensor.permute(1, 2, 0).cpu().numpy())
+    plt.title('Original Image')
+    plt.axis('off')
+
+    # Generate the INR image
+    inr_image = model.generate_image_tensor(resolution)
+
+    # Show the INR image
+    plt.subplot(2, 2, 3)
+    plt.imshow(inr_image)
+    plt.title('INR Image')
+    plt.axis('off')
+
+    # Compute and show the heatmap of L1 pixel distance
+    original_image = trainer.dataset.image_tensor.permute(1, 2, 0).cpu().numpy()
+    l1_distance = np.abs(original_image - inr_image).sum(axis=-1)
+    plt.subplot(2, 2, 4)
+    plt.imshow(l1_distance, cmap='hot', interpolation='nearest')
+    plt.title('Heatmap of L1 Pixel Distance')
+    plt.colorbar()
+    plt.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+
 # Example usage
 if __name__ == "__main__":
     image_path = '/home/matano/pix2pix/datasets/facades/train/1.jpg'
@@ -169,5 +159,10 @@ if __name__ == "__main__":
     # Read and split image into source and target
     source_tensor, target_tensor = read_and_split_image(image_path)
 
-    layer_dims = [2, 128, 128, 128, 3]  # Example dimensions
-    model = INRTrainer(layer_dims, source_tensor).train_inr(max_epochs=100)
+    layer_dims = [2, 128, 128, 128, 128, 3]  # Example dimensions
+    trainer = INRTrainer(layer_dims, source_tensor)
+    model = trainer.train_inr(max_epochs=100)
+
+    # Plot the results
+    resolution = (source_tensor.shape[1], source_tensor.shape[2])
+    plot_results(trainer, model, resolution)
