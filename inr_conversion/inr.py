@@ -1,4 +1,6 @@
+from datetime import datetime
 import torch
+from matplotlib.scale import scale_factory
 from torch import nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
@@ -12,7 +14,9 @@ import os
 
 # Define the INR MLP Model
 class INRModel(nn.Module):
-    def __init__(self, layer_dims):
+    def __init__(self, layer_dims, encoding='RGB'):
+        if encoding == 'RGB':
+            layer_dims.append(2 * 3)
         super(INRModel, self).__init__()
         layers = []
         for i in range(len(layer_dims) - 1):
@@ -20,9 +24,11 @@ class INRModel(nn.Module):
             if i < len(layer_dims) - 2:
                 layers.append(nn.ReLU())
         self.mlp = nn.Sequential(*layers)
+        self.softmax = nn.Softmax(dim=2)
 
     def forward(self, x):
-        return self.mlp(x)
+        reshaped = torch.reshape(self.mlp(x), (-1, 3, 2))
+        return self.softmax(reshaped)[:, :, 0]
 
     def generate_image_tensor(self, resolution):
         h, w = resolution
@@ -101,6 +107,10 @@ def my_imshow(image_path):
     plt.show()
 
 
+def tensor_imshow(tensor_image):
+    plt.imshow(tensor_image.permute(1, 2, 0))
+    plt.show()
+
 # Function to read the image, split into source and target, and return the source
 def read_and_split_image(image_path):
     image = Image.open(image_path).convert('RGB')
@@ -113,7 +123,7 @@ def read_and_split_image(image_path):
 
 
 # Function to plot results
-def plot_results(trainer, model, resolution):
+def plot_results(trainer, model, title, resolution, layer_dims, chosen_sample):
     # Plot the training loss
     plt.figure(figsize=(12, 8))
     plt.subplot(2, 2, 1)
@@ -148,21 +158,49 @@ def plot_results(trainer, model, resolution):
     plt.axis('off')
 
     plt.tight_layout()
+    now = datetime.now()
+    date = now.date().isoformat()
+    dir_name = os.path.join('results', str(chosen_sample), date)
+    os.makedirs(dir_name, exist_ok=True)
+    file_name = f'{"-".join(map(str, layer_dims))}_{now.strftime('%H-%m-%s')}-{title}.png'
+    plt.savefig(os.path.join(dir_name, file_name))
     plt.show()
+
+    print(f'original shape={original_image.shape}')
+    print(f'reconstructed shape={inr_image.shape}')
+
+
+def target_downsample(target_tensor, scale_factor=0.125):
+    return F.interpolate(target_tensor.unsqueeze(0), scale_factor=(scale_factor, scale_factor), mode='nearest-exact').squeeze(0)
+
+
+def source_downsample(source_tensor, scale_factor=0.125):
+    return F.interpolate(source_tensor.unsqueeze(0), scale_factor=(scale_factor, scale_factor), mode='nearest-exact').squeeze(0)
 
 
 # Example usage
 if __name__ == "__main__":
-    image_path = '/home/matano/pix2pix/datasets/facades/train/1.jpg'
+    chosen_sample = '2'
+    image_path = f'/home/matano/pix2pix/datasets/facades/train/{chosen_sample}.jpg'
     my_imshow(image_path)  # Show the original image with title
 
     # Read and split image into source and target
     source_tensor, target_tensor = read_and_split_image(image_path)
 
-    layer_dims = [2, 128, 128, 128, 128, 3]  # Example dimensions
-    trainer = INRTrainer(layer_dims, source_tensor)
-    model = trainer.train_inr(max_epochs=100)
+    scale_factor = 0.5
+    source_tensor = source_downsample(source_tensor, scale_factor=scale_factor)
+    target_tensor = target_downsample(target_tensor, scale_factor=scale_factor)
+    tensor_imshow(source_tensor)
+    tensor_imshow(target_tensor)
 
-    # Plot the results
-    resolution = (source_tensor.shape[1], source_tensor.shape[2])
-    plot_results(trainer, model, resolution)
+    # layer_dims = [2, 128, 128, 128, 128, 128]  # Example dimensions
+    # layer_dims = [2, 256, 256, 256, 256, 256, 256, 256]  # Example dimensions
+    layer_dims = [2, 256, 256, 256, 256, 256, 256, 256]  # Example dimensions
+    # layer_dims = [2, 256, 256, 256]  # Example dimensions
+    for tensor, title in [(source_tensor, 'src'), (target_tensor, 'tgt')]:
+        trainer = INRTrainer(layer_dims, tensor)
+        model = trainer.train_inr(max_epochs=100)
+        # Plot the results
+        resolution = (tensor.shape[1], tensor.shape[2])
+        plot_results(trainer, model, title, resolution, layer_dims, chosen_sample)
+        plt.close('all')
