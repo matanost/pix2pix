@@ -1,15 +1,19 @@
+import shutil
 from datetime import datetime
 import torch
-from matplotlib.scale import scale_factory
 from torch import nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
+from torchvision.utils import save_image
 from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+
+
+HOMEDIR = os.getcwd()
 
 
 # Define the INR MLP Model
@@ -23,6 +27,7 @@ class INRModel(nn.Module):
             layers.append(nn.Linear(layer_dims[i], layer_dims[i + 1]))
             if i < len(layer_dims) - 2:
                 layers.append(nn.ReLU())
+                # layers.append(nn.Dropout())
         self.mlp = nn.Sequential(*layers)
         self.softmax = nn.Softmax(dim=2)
 
@@ -100,9 +105,8 @@ def my_imshow(image_path):
     image = Image.open(image_path)
     h, w = image.size
     # Extract the part of the path starting from pix2pix
-    relative_path = os.path.join('pix2pix', os.path.relpath(image_path, start=image_path.split('pix2pix')[0]))
     plt.imshow(image)
-    plt.title(f'{relative_path} - {w}x{h}')
+    plt.title(f'{image_path.split('/')[-1]} - {w}x{h}')
     plt.axis('off')
     plt.show()
 
@@ -115,8 +119,10 @@ def tensor_imshow(tensor_image):
 def read_and_split_image(image_path):
     image = Image.open(image_path).convert('RGB')
     w, h = image.size
-    source_image = image.crop((0, 0, w // 2, h))
-    target_image = image.crop((w // 2, 0, w, h))
+    # source_image = image.crop((0, 0, w // 2, h))
+    # target_image = image.crop((w // 2, 0, w, h))
+    target_image = image.crop((0, 0, w // 2, h))
+    source_image = image.crop((w // 2, 0, w, h))
     source_tensor = transforms.ToTensor()(source_image)
     target_tensor = transforms.ToTensor()(target_image)
     return source_tensor, target_tensor
@@ -178,29 +184,67 @@ def source_downsample(source_tensor, scale_factor=0.125):
     return F.interpolate(source_tensor.unsqueeze(0), scale_factor=(scale_factor, scale_factor), mode='nearest-exact').squeeze(0)
 
 
-# Example usage
-if __name__ == "__main__":
-    chosen_sample = '2'
-    image_path = f'/home/matano/pix2pix/datasets/facades/train/{chosen_sample}.jpg'
-    my_imshow(image_path)  # Show the original image with title
+def input_file_path(dataset, chosen_sample):
+    return os.path.join(HOMEDIR, f'datasets/facades/dataset/{chosen_sample}.jpg')
 
-    # Read and split image into source and target
+def result_dir(chosen_sample):
+    dir_name = os.path.join(HOMEDIR, f'generated_inrs/{chosen_sample}')
+    os.makedirs(dir_name, exist_ok=True)
+    return dir_name
+
+def train_inr(dataset, chosen_sample, layer_dims, max_epochs=100, verbose=True):
+    image_path = input_file_path(dataset, chosen_sample)
+    output_dir = result_dir(chosen_sample)
+    shutil.copy(image_path, os.path.join(output_dir, f'{chosen_sample}_original.jpg'))
     source_tensor, target_tensor = read_and_split_image(image_path)
-
     scale_factor = 0.5
+    scale_factor = 1
     source_tensor = source_downsample(source_tensor, scale_factor=scale_factor)
     target_tensor = target_downsample(target_tensor, scale_factor=scale_factor)
-    tensor_imshow(source_tensor)
-    tensor_imshow(target_tensor)
 
-    # layer_dims = [2, 128, 128, 128, 128, 128]  # Example dimensions
-    # layer_dims = [2, 256, 256, 256, 256, 256, 256, 256]  # Example dimensions
-    layer_dims = [2, 256, 256, 256, 256, 256, 256, 256]  # Example dimensions
-    # layer_dims = [2, 256, 256, 256]  # Example dimensions
+    reconstructed_inr_images = {}
     for tensor, title in [(source_tensor, 'src'), (target_tensor, 'tgt')]:
-        trainer = INRTrainer(layer_dims, tensor)
-        model = trainer.train_inr(max_epochs=100)
-        # Plot the results
         resolution = (tensor.shape[1], tensor.shape[2])
+        if verbose:
+            tensor_imshow(tensor)
+        trainer = INRTrainer(layer_dims, tensor)
+        model = trainer.train_inr(max_epochs=max_epochs)
+        reconstructed_inr_images[title] = model.generate_image_tensor(resolution)
+        torch.save(model.state_dict(), os.path.join(output_dir, f'{title}_model.pt'))
+        # Plot the results
         plot_results(trainer, model, title, resolution, layer_dims, chosen_sample)
         plt.close('all')
+
+    reconstructed_src = reconstructed_inr_images['src']
+    reconstructed_tgt = reconstructed_inr_images['tgt']
+    stacked_tensor = np.concatenate((reconstructed_src, reconstructed_tgt), axis=2)
+    # Save the stacked image as a PNG file
+    save_image(torch.tensor(stacked_tensor), os.path.join(output_dir, f'{chosen_sample}_reconstructed.png'))
+    return output_dir
+
+
+def list_all_files_flat(directory):
+    return [os.path.join(directory, f) for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+
+
+# Example usage
+if __name__ == "__main__":
+    datasets = ['train', 'val', 'test']
+    samples = {dataset: list_all_files_flat(os.path.join(HOMEDIR, 'datasets/facades')) for dataset in datasets}
+    # chosen_sample = '2'
+
+    # layer_dims = [2, 128, 128, 128, 128, 128]  # Example dimensions
+    layer_dims = [2] + ([256] * 6)  # Example dimensions
+    # layer_dims = [2, 256, 256, 256, 256, 256, 256, 256]  # Example dimensions
+    # layer_dims = [2, 256, 256, 256, 256, 256, 256, 256]  # Example dimensions
+    # layer_dims = [2, 256, 256, 256]  # Example dimensions
+
+    for dataset, samples in samples:
+        for i, sample in enumerate(samples):
+            if i > 0:
+                break
+            sample_num = sample.split('/')[-1].split('.')[0]
+            train_inr(dataset, sample_num, layer_dims, max_epochs=100, verbose=True)
+
+    # image_path = input_file_path(chosen_sample)
+    # my_imshow(image_path)  # Show the original image with title
